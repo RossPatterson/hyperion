@@ -1963,6 +1963,7 @@ LOGM_DLL_IMPORT int  panel_command_capture( char* cmd, char** resp, bool quiet )
        "HHC02600I   -c        display CDEVHDR\n" \
        "HHC02600I   -1        display L1TAB (numeric one)\n" \
        "HHC02600I   -g        enable debug output\n" \
+       "HHC02600I   -v        enable version\n" \
        "HHC02600I CKD track and FBA block related options:\n" \
        "HHC02600I   -a cc hh  display absolute CCHH track data\n" \
        "HHC02600I   -r nnnnn  display relative track/block data\n" \
