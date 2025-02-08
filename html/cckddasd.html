@@ -1699,6 +1699,150 @@ the <b>cckd</b> command explained below.
 
 <table>
     <tr>
+        <td valign="top"><b>cckddiag &nbsp;</b></td>
+        <td valign="top"><em>[-a cc hh] [-c] [-d] [-g] [-o oo ll] [-r nnn] [-t] [-x] [-1] [-2] filename</em></td>
+    </tr>
+    <tr>
+        <td valign="top"><b>cckddiag64 &nbsp;</b></td>
+        <td valign="top"><em>[-a cc hh] [-c] [-d] [-g] [-o oo ll] [-r nnn] [-t] [-x] [-1] [-2] filename</em></td>
+    </tr>
+    <tr>
+        <td>&nbsp;</td>
+    </tr>
+    <tr>
+        <td valign="top"> &nbsp; </td>
+        <td valign="top">Display diagnostic information about a CCKD file.</td>
+    </tr>
+    <tr>
+        <td>&nbsp;</td>
+    </tr>
+    <tr>
+        <td valign="top"> &nbsp; </td>
+        <td valign="top">
+        <table>
+            <tr>
+                <td valign="top"><b>-a </b><i>cc hh</i></td>
+                <td valign="top">Display absolute CCHH track data.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-c &nbsp;</b></td>
+                <td valign="top">Display compressed-device header.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-d &nbsp;</b></td>
+                <td valign="top">Display device header.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-g &nbsp;</b></td>
+                <td valign="top">Enable debug output.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-o </b> <i>oo ll</i></td>
+                <td valign="top">Display data at offset <i>oo</i> of length <i>ll</i> in hex.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-r </b><i>nnn</i></td>
+                <td valign="top">Display track/block data at relative address <i>nnn</i>.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-t &nbsp;</b></td>
+                <td valign="top">Display track/block data.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-v &nbsp;</b></td>
+                <td valign="top">Display version and exit.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-x &nbsp;</b></td>
+                <td valign="top">Display track/block data in hex.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-1 &nbsp;</b></td>
+                <td valign="top">Display level 1 pointer table (numeric "1").</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-2 &nbsp;</b></td>
+                <td valign="top">Display level 2 pointer table related to <b>-a</b> or <b>-r</b> track or block.</td>
+            </tr>
+        </table>
+        </td>
+    </tr>
+    <tr>
+        <td>&nbsp;</td>
+    </tr>
+    <tr>
+        <td valign="top"> &nbsp; </td>
+        <td valign="top">
+            <b>NOTE:</b> This utility displays information from the specified DASD emulation
+            <i>file</i>, not <i>volume</i>.  Thus, you can inspect the details of, for example,
+            the second of three shadow files for a volume, but not the combined volume as
+            represented by applying the shadow files in order.
+        </td>
+    </tr>
+</table>
+
+<p><br>
+
+<table>
+    <tr>
+        <td valign="top"><b>cckdmap &nbsp;</b></td>
+        <td valign="top"><em>{ {-i|--info} | {-t|--tracks} | {-v|--verbose} } filename</em></td>
+    </tr>
+    <tr>
+        <td valign="top"> &nbsp; </td>
+        <td valign="top">
+        <table>
+            <tr>
+                <td valign="top"><b>-i or --info &nbsp;</b></td>
+                <td valign="top">Display only the file summary information.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-t or --tracks &nbsp;</b></td>
+                <td valign="top">Display a consolidated track report.  Only for CKD, not FBA.</td>
+            </tr>
+            <tr>
+                <td valign="top"><b>-v or --verbose &nbsp;</b></td>
+                <td valign="top">Display a detailed track report.  Only for CKD, not FBA.</td>
+            </tr>
+        </table>
+        </td>
+    </tr>
+    <tr>
+        <td>&nbsp;</td>
+    </tr>
+    <tr>
+        <td valign="top"> &nbsp; </td>
+        <td valign="top">Display a map of data in a CCKD file
+            <p>
+                This program is a CCKD64 debugging tool that reads a DASD
+                file and reports the physical sequence of all of its areas,
+                including free space.  The report is in physical file offset
+                sequence.  It allows you to determine not only how many (and
+                where) all free space gaps are, but also where each track's
+                data resides, the size of the track data area, where both the
+                device header and compressed device headers, L1 table and all
+                L2 tables are located.  This allows you to determine whether
+                the preferred L2 table area (which immediately follows the L1
+                table) contains only L2 tables, or whether is also contains
+                track data or free space, and whether or not all of a file's
+                L2 tables are where they should be (within the preferred L2
+                area).  It allows us to determine whether dasdinit created
+                the file correctly or not and whether cckdcomp compressed
+                the file correctly or not, and thus whether the cckd garbage
+                collector's cckd_gc_l2 (Reposition level 2 tables) function
+                will likely be invoked or not (which is known to be buggy).
+            </p>
+		</td>
+    </tr>
+    <tr>
+        <td>&nbsp;</td>
+    </tr>
+</table>
+
+<p><br>
+
+<table>
+    <tr>
         <td valign="top"><b>cckdswap &nbsp;</b></td>
         <td valign="top"><em>[-v] [-f] [-level] filename1 [filename2 ...]</em></td>
     </tr>
