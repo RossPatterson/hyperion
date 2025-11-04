@@ -1623,7 +1623,7 @@ LOGM_DLL_IMPORT int  panel_command_capture( char* cmd, char** resp, bool quiet )
        "HHC02410I options:\n" \
        "HHC02410I   -r     replace existing output file\n" \
        "HHC02410I   -q     suppress progress messages%s"
-#define HHC02411 "Usage: %s [-f] [-level] [-ro] file1 [file2 ...]\n" \
+#define HHC02411 "Usage: %s [-f] [-ro] [-n] file1 [file2 ...]\n" \
        "HHC02410I   file    name of DASD image file\n" \
        "HHC02411I options:\n" \
        "HHC02411I   -f      force check even if OPENED bit is on\n" \
