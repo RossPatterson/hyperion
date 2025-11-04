@@ -136,6 +136,8 @@ int     cckd_sf_init(DEVBLK *dev);
 int     cckd_sf_new(DEVBLK *dev);
 void    cckd_lock_devchain(int flag);
 void    cckd_unlock_devchain();
+void    add_dev_to_cckd_chain_locked( DEVBLK* new_dev );
+void    remove_dev_from_cckd_chain_locked( DEVBLK* old_dev );
 void    cckd_dhstart(int by_cmdline);
 void*   cckd_dh(void* arg);
 void    cckd_gcstart();

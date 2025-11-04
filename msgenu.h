@@ -493,7 +493,7 @@ LOGM_DLL_IMPORT int  panel_command_capture( char* cmd, char** resp, bool quiet )
 #define HHC00392 "CCKD Dasd Hardener pass complete."
 #define HHC00393 "Thread '%s': sleeping for %d seconds at %s..."
 #define HHC00394 "Waiting %d seconds to start next CCKD garbage collection cycle..."
-//efine HHC00395 (available)
+#define HHC00395 "Hardening CCKD%s dasd %1d:%04X"
 #define HHC00396 "%1d:%04X %s" // (cckd_trace)
 //efine HHC00397 (available)
 #define HHC00398 "%s" // (trace table)

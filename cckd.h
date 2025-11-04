@@ -271,9 +271,11 @@ typedef  char         CCKD_ITRACE[256]; /* Trace table entry         */
 /*-------------------------------------------------------------------*/
 /*                   Global CCKD dasd block                          */
 /*-------------------------------------------------------------------*/
-struct CCKDBLK {                        /* Global cckd dasd block    */
-        BYTE             id[8];         /* "CCKDBLK "                */
-#define CCKDBLK_ID      "CCKDBLK "      /* "CCKDBLK "                */
+struct CCKDBLK                          /* Global cckd dasd block    */
+{
+        BYTE             id[8];         /* Eye-catcher               */
+#define CCKDBLK_ID      "CCKDBLK "      /* Eye-catcher               */
+
         DEVBLK          *dev1st;        /* 1st device in cckd queue  */
         unsigned int     batch:1,       /* 1=called in batch mode    */
                          debug:1,       /* 1=CCW trace debug msgs    */
@@ -295,6 +297,16 @@ struct CCKDBLK {                        /* Global cckd dasd block    */
         int              dhmax;         /* Max Dasd Hardeners        */
         int              dhint;         /* Wait time in seconds      */
         bool             dhstart;       /* 1=start Dasd Hardener     */
+
+        LOCK             dh_gc_lock;    /* Combined Garbage Collector
+                                           and Dasd Hardener lock, to
+                                           prevent them from running
+                                           at the same time          */
+
+#define LOCK_DH_GC()    obtain_lock(  &cckdblk.dh_gc_lock )
+#define UNLOCK_DH_GC()  release_lock( &cckdblk.dh_gc_lock )
+
+
         LOCK             gclock;        /* Garbage collector lock    */
         COND             gccond;        /* Garbage collector cond    */
         int              gcs;           /* Number garbage collector threads started */
@@ -303,6 +315,8 @@ struct CCKDBLK {                        /* Global cckd dasd block    */
         int              gcint;         /* Wait time in seconds      */
         int              gcparm;        /* Adjustment parm           */
         bool             gcstart;       /* 1=start Garbage Collector */
+        bool             gcmsgs;        /* Garbage collector msgs    */
+
         LOCK             wrlock;        /* I/O lock                  */
         COND             wrcond;        /* I/O condition             */
         int              wrpending;     /* Number writes pending     */
@@ -331,7 +345,6 @@ struct CCKDBLK {                        /* Global cckd dasd block    */
         int              devwaiters;    /* Number of waiters         */
 
         int              freepend;      /* Number freepend cycles    */
-        int              gcmsgs;        /* Garbage collector msgs    */
         int              nosfd;         /* 1=No stats rpt at close   */
         int              nostress;      /* 1=No stress writes        */
         int              linuxnull;     /* 1=Always check nulltrk    */

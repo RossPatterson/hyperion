@@ -33,7 +33,6 @@ DISABLE_GCC_UNUSED_SET_WARNING;
 int cckd64_dasd_init_handler ( DEVBLK *dev, int argc, char *argv[] )
 {
 CCKD64_EXT  *cckd;                      /* -> cckd extension         */
-DEVBLK      *dev2;                      /* -> device in cckd queue   */
 int          i;                         /* Counter                   */
 int          fdflags;                   /* File flags                */
 char         buf[32];                   /* Work buffer                      */
@@ -103,10 +102,9 @@ char         buf[32];                   /* Work buffer                      */
 
     /* Insert the device into the cckd device queue */
     cckd_lock_devchain(1);
-    for (cckd = NULL, dev2 = cckdblk.dev1st; dev2; dev2 = cckd->devnext)
-        cckd = dev2->cckd_ext;
-    if (cckd) cckd->devnext = dev;
-    else cckdblk.dev1st = dev;
+    {
+        add_dev_to_cckd_chain_locked( dev );
+    }
     cckd_unlock_devchain();
 
     cckdblk.batch = dev->batch;
@@ -186,16 +184,8 @@ int             rc, i;                  /* Return code, Loop index   */
 
     /* Remove the device from the cckd queue */
     cckd_lock_devchain(1);
-    if (dev == cckdblk.dev1st) cckdblk.dev1st = cckd->devnext;
-    else
     {
-        DEVBLK *dev2 = cckdblk.dev1st;
-        CCKD64_EXT *cckd2 = dev2->cckd_ext;
-        while (cckd2->devnext != dev)
-        {
-           dev2 = cckd2->devnext; cckd2 = dev2->cckd_ext;
-        }
-        cckd2->devnext = cckd->devnext;
+        remove_dev_from_cckd_chain_locked( dev );
     }
     cckd_unlock_devchain();
 
@@ -663,6 +653,9 @@ int cckd64_update_track (DEVBLK *dev, int trk, int off,
 CCKD64_EXT     *cckd;                   /* -> cckd extension         */
 int             rc;                     /* Return code               */
 
+    if (!dev->cckd64)
+        return cckd_update_track( dev, trk, off, buf, len, unitstat );
+
     cckd = dev->cckd_ext;
 
     /* Error if opened read-only */
@@ -713,6 +706,10 @@ int             rc;                     /* Return code               */
         dev->bufupd = 1;
         shared_update_notify (dev, trk);
     }
+
+    /* Ensure the Dasd Hardener is running, if it's supposed to be. */
+    if (cckdblk.dhint > 0)
+        cckd_dhstart(0);
 
     return len;
 
@@ -1361,6 +1358,7 @@ BYTE            buf2[ 64*1024 ];        /* 64K Compress buffer       */
 
         /* Write the track image */
         cckd64_write_trkimg( dev, bufp, bufl, trk, CCKD_SIZE_ANY );
+        cckd->needsdh = 1;    /* We've updated the file. */
     }
     release_lock( &cckd->filelock );
 
@@ -1396,6 +1394,10 @@ BYTE            buf2[ 64*1024 ];        /* 64K Compress buffer       */
         }
     }
     release_lock( &cckdblk.gclock );
+
+    /* Ensure the Dasd Hardener is running, if it's supposed to be. */
+    if (cckdblk.dhint > 0)
+        cckd_dhstart(0);
 
     obtain_lock( &cckd->cckdiolock );
     {

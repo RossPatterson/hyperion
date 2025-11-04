@@ -69,6 +69,7 @@ int cckd_dasd_init( int argc, BYTE* argv[] )
 
     initialize_lock( &cckdblk.dhlock  );
     initialize_lock( &cckdblk.gclock  );
+    initialize_lock( &cckdblk.dh_gc_lock );
     initialize_lock( &cckdblk.ralock  );
     initialize_lock( &cckdblk.wrlock  );
     initialize_lock( &cckdblk.devlock );
@@ -233,7 +234,6 @@ void cckd_dasd_term_if_appropriate()
 int cckd_dasd_init_handler ( DEVBLK *dev, int argc, char *argv[] )
 {
 CCKD_EXT    *cckd;                      /* -> cckd extension         */
-DEVBLK      *dev2;                      /* -> device in cckd queue   */
 int          i;                         /* Counter                   */
 int          fdflags;                   /* File flags                */
 char         buf[32];                   /* Work buffer                      */
@@ -304,13 +304,7 @@ char         buf[32];                   /* Work buffer                      */
     /* Insert the device into the cckd device queue */
     cckd_lock_devchain(1);
     {
-        for (cckd = NULL, dev2 = cckdblk.dev1st; dev2; dev2 = cckd->devnext)
-            cckd = dev2->cckd_ext;
-
-        if (cckd)
-            cckd->devnext = dev;
-        else
-            cckdblk.dev1st = dev;
+        add_dev_to_cckd_chain_locked( dev );
     }
     cckd_unlock_devchain();
 
@@ -391,16 +385,8 @@ int             rc, i;                  /* Return code, Loop index   */
 
     /* Remove the device from the cckd queue */
     cckd_lock_devchain(1);
-    if (dev == cckdblk.dev1st) cckdblk.dev1st = cckd->devnext;
-    else
     {
-        DEVBLK *dev2 = cckdblk.dev1st;
-        CCKD_EXT *cckd2 = dev2->cckd_ext;
-        while (cckd2->devnext != dev)
-        {
-           dev2 = cckd2->devnext; cckd2 = dev2->cckd_ext;
-        }
-        cckd2->devnext = cckd->devnext;
+        remove_dev_from_cckd_chain_locked( dev );
     }
     cckd_unlock_devchain();
 
@@ -951,6 +937,9 @@ int cckd_update_track (DEVBLK *dev, int trk, int off,
 {
 CCKD_EXT       *cckd;                   /* -> cckd extension         */
 int             rc;                     /* Return code               */
+
+   if (dev->cckd64)
+        return cckd64_update_track( dev, trk, off, buf, len, unitstat );
 
     cckd = dev->cckd_ext;
 
@@ -1730,12 +1719,14 @@ int             dhid;                   /* Identifier                */
 struct timeval  tv_now;                 /* Time-of-day (as timeval)  */
 time_t          tt_now;                 /* Time-of-day (as time_t)   */
 struct timespec tm;                     /* Time-of-day to wait       */
-DEVBLK          *dev;
+DEVBLK          *dev;                   /* Device Block pointer      */
 CCKD_EXT        *cckd;                  /* -> cckd extension         */
-int             rc;
-bool            cont = true;
+int             rc;						/* generic return code       */
+bool            cont = true;            /* Continue running boolean  */
 
     UNREFERENCED( arg );
+
+    LOCK_DH_GC();       // (prevent Garbage Collector from running)
 
     obtain_lock( &cckdblk.dhlock );
     {
@@ -1768,6 +1759,7 @@ bool            cont = true;
 
             signal_condition( &cckdblk.termcond );  /* signal if last thread ending before init. */
             release_lock( &cckdblk.dhlock );
+            UNLOCK_DH_GC();     // (allow Garbage Collector to run)
             return NULL;        /* too many already started, return  */
         }
     }
@@ -1792,8 +1784,8 @@ bool            cont = true;
         }
         release_lock( &cckdblk.dhlock );
 
-        if (!cont)
-            break;
+        if (!cont)    // (continue running?)
+            break;    // (no, time to exit!)
 
         // "Starting CCKD Dasd Hardener pass..."
         if (cckdblk.debug)
@@ -1803,43 +1795,50 @@ bool            cont = true;
 
         /* Harden any DASD that have been updated since the last time. */
         cckd_lock_devchain(0);
-        for (dev = cckdblk.dev1st; dev; dev = cckd->devnext)
         {
-            cckd = dev->cckd_ext;
-            /* Flush the cache and wait for the writes to complete. */
-            obtain_lock( &cckd->cckdiolock );
+            for (dev = cckdblk.dev1st; dev; dev = cckd->devnext)
             {
-                cckd_flush_cache( dev );
-                if (cckd->needsdh && !cckd->stopping && !sysblk.shutdown)
-                {
-                    CCKD_TRACE("needs hardening");
-                    while (cckd->wrpending || cckd->cckdioact)
-                    {
-                        cckd->cckdwaiters++;
-                        CCKD_TRACE("%s waiting 1 second to complete %d pending writes",
-                            CCKD_DH_THREAD_NAME, cckd->wrpending);
-                        rc = timed_wait_condition_relative_usecs(
-                            &cckd->cckdiocond, &cckd->cckdiolock, 1000000, NULL );
-                        cckd->cckdwaiters--;
-                        if (EINTR == rc)
-                            continue;
-                    }
-                    broadcast_condition( &cckd->cckdiocond );
-                }
-            }
-            release_lock( &cckd->cckdiolock );
+                cckd = dev->cckd_ext;
 
-            /* Harden the disk file. */
-            obtain_lock( &cckd->filelock );
-            {
-                if (cckd->needsdh && !cckd->stopping && !sysblk.shutdown)
+                /* Flush the cache and wait for the writes to complete. */
+                obtain_lock( &cckd->cckdiolock );
                 {
-                    cckd_harden (dev);
-                    cckd->needsdh = 0;
-                    CCKD_TRACE("hardened");
+                    cckd_flush_cache( dev );
+                    if (cckd->needsdh && !cckd->stopping && !sysblk.shutdown)
+                    {
+                        CCKD_TRACE("needs hardening");
+                        while (cckd->wrpending || cckd->cckdioact)
+                        {
+                            cckd->cckdwaiters++;
+                            CCKD_TRACE("%s waiting 1 second to complete %d pending writes",
+                                CCKD_DH_THREAD_NAME, cckd->wrpending);
+                            rc = timed_wait_condition_relative_usecs(
+                                &cckd->cckdiocond, &cckd->cckdiolock, 1000000, NULL );
+                            cckd->cckdwaiters--;
+                            if (EINTR == rc)
+                                continue;
+                        }
+                        broadcast_condition( &cckd->cckdiocond );
+                    }
                 }
+                release_lock( &cckd->cckdiolock );
+
+                /* Harden the disk file. */
+                obtain_lock( &cckd->filelock );
+                {
+                    if (cckd->needsdh && !cckd->stopping && !sysblk.shutdown)
+                    {
+                        // "Hardening CCKD%s dasd %1d:%04X"
+                        if (cckdblk.debug)
+                            WRMSG( HHC00395, "D", dev->cckd64 ? "64" : "", LCSS_DEVNUM );
+
+                        cckd_harden (dev);
+                        cckd->needsdh = 0;
+                        CCKD_TRACE("hardened");
+                    }
+                }
+                release_lock( &cckd->filelock );
             }
-            release_lock( &cckd->filelock );
         }
         cckd_unlock_devchain();
 
@@ -1866,11 +1865,17 @@ bool            cont = true;
 
         obtain_lock( &cckdblk.dhlock );
         {
-            timed_wait_condition( &cckdblk.dhcond, &cckdblk.dhlock, &tm );
+            UNLOCK_DH_GC();     // (allow Garbage Collector to run)
+            {
+                timed_wait_condition( &cckdblk.dhcond, &cckdblk.dhlock, &tm );
+            }
+            LOCK_DH_GC();       // (prevent Garbage Collector from running)
         }
         release_lock( &cckdblk.dhlock );
     }
-    // end while(...)
+    // end while(1)
+
+    /* We're exiting... */
 
     if (!cckdblk.batch || cckdblk.batchml > 1)
         // "Thread id "TIDPAT", prio %d, name '%s' ended"
@@ -1885,6 +1890,8 @@ bool            cont = true;
              signal_condition( &cckdblk.termcond );
     }
     release_lock( &cckdblk.dhlock );
+
+    UNLOCK_DH_GC();     // (allow Garbage Collector to run)
 
     return NULL;
 } /* end thread cckd_dh */
@@ -5202,6 +5209,119 @@ void cckd_unlock_devchain()
 }
 
 /*-------------------------------------------------------------------*/
+/*         ADD this device to our cckd device chain                  */
+/*-------------------------------------------------------------------*/
+/*                                                                   */
+/* PROGRAMMING NOTE: it doesn't matter whether the CCKD EXTENSION    */
+/* pointer we use is CCKD_EXT or CCKD64_EXT, since the 'devnext'     */
+/* field is always the very first field in both, and is always the   */
+/* same size too, being a simple pointer to the next device's DEVBLK.*/
+/*                                                                   */
+/* Caller MUST hold the devchain lock before calling!                */
+/*                                                                   */
+/*-------------------------------------------------------------------*/
+void add_dev_to_cckd_chain_locked( DEVBLK* new_dev )
+{
+    DEVBLK*    dev;
+    CCKD_EXT*  cckd;
+
+    // New devices are always added to the end of the existing chain,
+    // becoming the new end-of-chain device.
+    
+    cckd = new_dev->cckd_ext;               // (point to our CCKD_EXT)
+    cckd->devnext = NULL;                   // (indicate end-of-chain)
+    
+    if (!cckdblk.dev1st)                    // (does chain exist yet?)
+    {
+        cckdblk.dev1st = new_dev;           // (we're the first link!)
+    }
+    else
+    {
+        // Chase the existing device chain until NULL (end-of-chain)
+        // is reached, saving the ptr to each device's CCKD_EXT along
+        // the way.
+        //
+        // When we're done, our CCKD_EXT pointer will alway point to
+        // the CCKD_EXT of the device that was previosuly AS the last
+        // device in the chain (as its 'devnext' is currently NULL).
+
+        for (dev = cckdblk.dev1st; dev; cckd = dev->cckd_ext,
+                                        dev = cckd->devnext)
+        {
+            ;   // (do nothing)
+        }
+
+        ASSERT( !dev && cckd && !cckd->devnext );   // (sanity check)
+
+        // Now update the old/previous last-device-in-the-chain to
+        // point to us instead, so that WE then become the new
+        // end-of-chain device (since OUR 'devnext' is NULL).
+
+        cckd->devnext = new_dev;            // (point old last to us)
+    }
+}
+
+/*-------------------------------------------------------------------*/
+/*        REMOVE this device from our cckd device chain              */
+/*-------------------------------------------------------------------*/
+/*                                                                   */
+/* PROGRAMMING NOTE: it doesn't matter whether the CCKD EXTENSION    */
+/* pointer we use is CCKD_EXT or CCKD64_EXT, since the 'devnext'     */
+/* field is always the very first field in both, and is always the   */
+/* same size too, being a simple pointer to the next device's DEVBLK.*/
+/*                                                                   */
+/* Caller MUST hold the devchain lock before calling!                */
+/*                                                                   */
+/*-------------------------------------------------------------------*/
+void remove_dev_from_cckd_chain_locked( DEVBLK* old_dev )
+{
+    DEVBLK*    prev_dev;        // (device that currently points to US)
+    CCKD_EXT*  prev_ext;        // (prev_dev's ext))
+
+    DEVBLK*    our_next_dev;    // (device that WE currently point to)
+    CCKD_EXT*  ext;             // (work)
+
+    // Save pointer to device that WE currently point to (our next)
+
+    ext = old_dev->cckd_ext;            // (pointer to OUR extension)
+    our_next_dev = ext->devnext;        // (save pointer to OUR next)
+
+    // If we're currently the very first entry in the chain (the
+    // head of the chain), then just set the first-in-chain pointer
+    // to whatever device our next-in-chain happens to point to, and
+    // we're done!
+
+    if (cckdblk.dev1st == old_dev)          // (head of chain == US?)
+    {
+        cckdblk.dev1st = our_next_dev;      // (our next dev or NULL)
+        return;
+    }
+
+    // Otherwise we need to locate the device in the chain that
+    // currently points to US (our PREVIOUS link in the chain).
+
+    for (prev_dev = cckdblk.dev1st,         // (start at begining)
+         prev_ext = prev_dev->cckd_ext;     // (save its ext pointer)
+         
+         prev_ext->devnext != old_dev;      // (until our prev found)
+    
+         prev_dev = prev_ext->devnext,      // (next device in chain)
+         prev_ext = prev_dev->cckd_ext )    // (save its ext pointer)
+    {
+        ;   // (do nothing)
+    }
+
+    ASSERT( prev_ext->devnext == old_dev ); // (quick sanity check)
+
+    // Update our PREVIOUS device's next-in-chain pointer to NOT point
+    // to US (since we're going away!), but rather to point to OUR
+    // next-device-in-chain value instead (thus effectively removing
+    // us from the chain by causing it to completely skip over us).
+
+    prev_ext->devnext = our_next_dev;       // (our next dev or NULL)
+}
+
+/*-------------------------------------------------------------------*/
 /* Start garbage collector                                           */
 /*-------------------------------------------------------------------*/
 void cckd_gcstart()
@@ -5273,15 +5393,7 @@ void cckd_gcstart()
 }
 
 /*-------------------------------------------------------------------*/
-/* Garbage Collection thread                                         */
-/*                                                                   */
-/*  While provision is made in the code that initiates cckd_gcol     */
-/*  for execution of more than one concurrent Garbage Collector,     */
-/*  the thread runs with mutex cckdblk.gclock held at all times      */
-/*  and is therefore limited to one concurrent thread.  We'll leave  */
-/*  the initiation code as-is in anticipation of the day when we     */
-/*  might get to a max of one collector per compressed device.       */
-/*                                                                   */
+/* The one and ONLY Garbage Collection thread                        */
 /*-------------------------------------------------------------------*/
 void* cckd_gcol(void* arg)
 {
@@ -5291,45 +5403,67 @@ CCKD_EXT       *cckd;                   /* -> cckd extension         */
 struct timeval  tv_now;                 /* Time-of-day (as timeval)  */
 time_t          tt_now;                 /* Time-of-day (as time_t)   */
 struct timespec tm;                     /* Time-of-day to wait       */
-int             gcs;
+int             gcs;                    /* #of gc threads started    */
+bool            cont = true;            /* Continue running boolean  */
 
     UNREFERENCED( arg );
 
-    gettimeofday (&tv_now, NULL);
+    LOCK_DH_GC();       // (prevent Dasd Hardener from running)
+
+    gettimeofday( &tv_now, NULL );
 
     obtain_lock (&cckdblk.gclock);
-
-    gcol = ++cckdblk.gca;           // (gc thread identifier)
-
-    /* Return without messages if too many already started */
-    if (gcol > cckdblk.gcmax)
     {
-        --cckdblk.gcs;
-        --cckdblk.gca;
+        gcol = ++cckdblk.gca;           // (gc thread identifier)
 
-        if (!cckdblk.gcs)
+        /* Return without messages if too many already started */
+        if (gcol > cckdblk.gcmax)
         {
-            if (!cckdblk.batch || cckdblk.batchml > 1)
-                // "Thread id "TIDPAT", prio %d, name '%s' ended"
-                LOG_THREAD_END( CCKD_GC_THREAD_NAME  );
-        }
-        else
-            if (!cckdblk.batch || cckdblk.batchml > 0)
-                // "Ending thread "TIDPAT" %s, pri=%d, started=%d, max=%d exceeded"
-                WRMSG( HHC00108, "W", TID_CAST( thread_id()), CCKD_GC_THREAD_NAME,
-                    get_thread_priority(), cckdblk.gcs, cckdblk.gcmax );
+            --cckdblk.gcs;
+            --cckdblk.gca;
 
-        release_lock( &cckdblk.gclock );
-        signal_condition( &cckdblk.termcond );  /* signal if last gcol thread ending before init. */
-        return NULL;        /* too many already started, return  */
+            if (!cckdblk.gcs)
+            {
+                if (!cckdblk.batch || cckdblk.batchml > 1)
+                    // "Thread id "TIDPAT", prio %d, name '%s' ended"
+                    LOG_THREAD_END( CCKD_GC_THREAD_NAME  );
+            }
+            else
+                if (!cckdblk.batch || cckdblk.batchml > 0)
+                    // "Ending thread "TIDPAT" %s, pri=%d, started=%d, max=%d exceeded"
+                    WRMSG( HHC00108, "W", TID_CAST( thread_id()), CCKD_GC_THREAD_NAME,
+                        get_thread_priority(), cckdblk.gcs, cckdblk.gcmax );
+
+            release_lock( &cckdblk.gclock );
+            signal_condition( &cckdblk.termcond );  /* signal if last gcol thread ending before init. */
+            UNLOCK_DH_GC();     // (allow Dasd Hardener to run)
+            return NULL;        /* too many already started, return  */
+        }
     }
+    release_lock( &cckdblk.gclock );
 
     if (!cckdblk.batch || cckdblk.batchml > 1)
         // "Thread id "TIDPAT", prio %d, name '%s' started"
         LOG_THREAD_BEGIN( CCKD_GC_THREAD_NAME  );
 
-    while (gcol <= cckdblk.gcmax)
+    while (1)
     {
+        /* Exit when asked to do so (gcmax=0) */
+        obtain_lock( &cckdblk.gclock );
+        {
+            cont =
+            (1
+                && cckdblk.gcmax > 0
+                && cckdblk.gcint > 0
+                && gcol <= cckdblk.gcmax
+                && !sysblk.shutdown
+            );
+        }
+        release_lock( &cckdblk.gclock );
+
+        if (!cont)    // (continue running?)
+            break;    // (no, time to exit!)
+
         // "Begin CCKD garbage collection"
         if (cckdblk.gcmsgs)
             WRMSG( HHC00382, "I" );
@@ -5368,22 +5502,38 @@ int             gcs;
 
         tm.tv_sec = tv_now.tv_sec + cckdblk.gcint;
         tm.tv_nsec = tv_now.tv_usec * 1000;
-        timed_wait_condition( &cckdblk.gccond, &cckdblk.gclock, &tm );
+
+        obtain_lock (&cckdblk.gclock);
+        {
+            UNLOCK_DH_GC();     // (allow Dasd Hardener to run)
+            {
+                timed_wait_condition( &cckdblk.gccond, &cckdblk.gclock, &tm );
+            }
+            LOCK_DH_GC();       // (prevent Dasd Hardener from running)
+        }
+        release_lock( &cckdblk.gclock );
     }
+    // end while(1)
+
+    /* We're exiting... */
 
     if (!cckdblk.batch || cckdblk.batchml > 1)
         // "Thread id "TIDPAT", prio %d, name '%s' ended"
         LOG_THREAD_END( CCKD_GC_THREAD_NAME  );
 
-    cckdblk.gcs--;
-    cckdblk.gca--;
+    obtain_lock (&cckdblk.gclock);
+    {
+        cckdblk.gcs--;
+        cckdblk.gca--;
 
-    gcs = cckdblk.gcs;
+        gcs = cckdblk.gcs;
 
+        if (!gcs)
+            signal_condition( &cckdblk.termcond );
+    }
     release_lock( &cckdblk.gclock );
 
-    if (!gcs)
-        signal_condition( &cckdblk.termcond );
+    UNLOCK_DH_GC();     // (allow Dasd Hardener to run)
 
     return NULL;
 } /* end thread cckd_gcol */
