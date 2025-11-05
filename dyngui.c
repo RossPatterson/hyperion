@@ -677,6 +677,7 @@ void  UpdateStatus ()
         || curr_instcount            != prev_instcount
         || pTargetCPU_REGS->cpustate != prev_cpustate
         || memcmp( prev_psw, psw, sizeof( prev_psw )) != 0
+        || (WAITSTATE( &pTargetCPU_REGS->psw) && IS_IC_DISABLED_WAIT_PSW( pTargetCPU_REGS ))
     )
     {
         bStatusChanged = TRUE;          // (something has indeed changed...)
