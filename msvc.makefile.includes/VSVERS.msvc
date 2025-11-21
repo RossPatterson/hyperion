@@ -35,7 +35,7 @@ vers_vs2008=9
 vers_vs2005=8
 
 !IFDEF VS180COMNTOOLS
-!MESSAGE Makefile presuming VS2026 (VS18 = _MSC_VER 1940)
+!MESSAGE Makefile presuming VS2026 (VS18 = _MSC_VER 1950)
 vsversion=$(vers_vs2026)
 !ELSEIFDEF VS170COMNTOOLS
 !MESSAGE Makefile presuming VS2022 (VS17 = _MSC_VER 1930)

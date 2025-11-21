@@ -6534,6 +6534,11 @@ DEF_INST( vector_galois_field_multiply_sum_and_accumulate )
     ZVECTOR_END( regs );
 }
 
+#if defined(_MSVC_) && (_MSC_VER >= VS2026)
+PUSH_MSVC_WARNINGS()
+DISABLE_MSVC_WARNING( 4319 )
+#endif
+
 /*-----------------------------------------------------------------------------*/
 /* E7BD VSBCBI - Vector Subtract With Borrow Compute Borrow Indication [VRR-d] */
 /*-----------------------------------------------------------------------------*/
@@ -6570,6 +6575,15 @@ DEF_INST( vector_subtract_with_borrow_compute_borrow_indication )
 
     ZVECTOR_END( regs );
 }
+
+#if defined(_MSVC_) && (_MSC_VER >= VS2026)
+POP_MSVC_WARNINGS()
+#endif
+
+#if defined(_MSVC_) && (_MSC_VER >= VS2026)
+PUSH_MSVC_WARNINGS()
+DISABLE_MSVC_WARNING( 4319 )
+#endif
 
 /*-------------------------------------------------------------------*/
 /* E7BF VSBI   - Vector Subtract With Borrow Indication      [VRR-d] */
@@ -6609,6 +6623,10 @@ DEF_INST( vector_subtract_with_borrow_indication )
 
     ZVECTOR_END( regs );
 }
+
+#if defined(_MSVC_) && (_MSC_VER >= VS2026)
+POP_MSVC_WARNINGS()
+#endif
 
 /*-------------------------------------------------------------------*/
 /* E7D4 VUPLL  - Vector Unpack Logical Low                   [VRR-a] */
