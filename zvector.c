@@ -6534,11 +6534,17 @@ DEF_INST( vector_galois_field_multiply_sum_and_accumulate )
     ZVECTOR_END( regs );
 }
 
+//------------------------------------------------------------------------------
+// PROGRAMMING NOTE: the "potentially incorrect code/bevaior" that Microsoft's
+// C4319 warning is reporting us about was thoroughly researched and determined
+// to be unwarranted IN THIS PARTICULAR SPECIFIC CASE. Thus the disablement of
+// the warning, as the code, as written, was determined to be 100% correct.
+// Refer to GitHub Issue #787 (especially near the end) for further details.
+//------------------------------------------------------------------------------
 #if defined(_MSVC_) && (_MSC_VER >= VS2026)
 PUSH_MSVC_WARNINGS()
 DISABLE_MSVC_WARNING( 4319 )
 #endif
-
 /*-----------------------------------------------------------------------------*/
 /* E7BD VSBCBI - Vector Subtract With Borrow Compute Borrow Indication [VRR-d] */
 /*-----------------------------------------------------------------------------*/
@@ -6575,16 +6581,22 @@ DEF_INST( vector_subtract_with_borrow_compute_borrow_indication )
 
     ZVECTOR_END( regs );
 }
-
 #if defined(_MSVC_) && (_MSC_VER >= VS2026)
 POP_MSVC_WARNINGS()
 #endif
 
+
+//------------------------------------------------------------------------------
+// PROGRAMMING NOTE: the "potentially incorrect code/bevaior" that Microsoft's
+// C4319 warning is reporting us about was thoroughly researched and determined
+// to be unwarranted IN THIS PARTICULAR SPECIFIC CASE. Thus the disablement of
+// the warning, as the code, as written, was determined to be 100% correct.
+// Refer to GitHub Issue #787 (especially near the end) for further details.
+//------------------------------------------------------------------------------
 #if defined(_MSVC_) && (_MSC_VER >= VS2026)
 PUSH_MSVC_WARNINGS()
 DISABLE_MSVC_WARNING( 4319 )
 #endif
-
 /*-------------------------------------------------------------------*/
 /* E7BF VSBI   - Vector Subtract With Borrow Indication      [VRR-d] */
 /*-------------------------------------------------------------------*/
@@ -6623,7 +6635,6 @@ DEF_INST( vector_subtract_with_borrow_indication )
 
     ZVECTOR_END( regs );
 }
-
 #if defined(_MSVC_) && (_MSC_VER >= VS2026)
 POP_MSVC_WARNINGS()
 #endif
