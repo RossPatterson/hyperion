@@ -709,7 +709,7 @@ int             rc;                     /* Return code               */
 
     /* Ensure the Dasd Hardener is running, if it's supposed to be. */
     if (cckdblk.dhint > 0)
-        cckd_dhstart(0);
+        cckd_dhstart( false );
 
     return len;
 
@@ -1272,11 +1272,9 @@ DEVBLK         *dev = data;             /* -> device block           */
 /*-------------------------------------------------------------------*/
 void cckd64_writer_write( int writer, int o )
 {
-TID             tid;                    /* Writer thead id           */
 CCKD64_EXT*     cckd;                   /* -> cckd extension         */
 DEVBLK*         dev;                    /* Device block              */
 U16             devnum;                 /* Device number             */
-int             rc;                     /* (work) return code        */
 int             trk;                    /* Track number              */
 BYTE*           buf;                    /* Buffer                    */
 BYTE*           bufp;                   /* Buffer to be written      */
@@ -1362,43 +1360,6 @@ BYTE            buf2[ 64*1024 ];        /* 64K Compress buffer       */
     }
     release_lock( &cckd->filelock );
 
-    /* Schedule the garbage collector */
-    obtain_lock( &cckdblk.gclock );/* ensure read integrity for gc count */
-    {
-        if (cckdblk.gcint > 0 && cckdblk.gcs < cckdblk.gcmax)
-        {
-            /* Schedule a new garbage collector thread */
-
-            if (!cckdblk.batch || cckdblk.batchml > 1)
-                // "Starting thread %s, active=%d, started=%d, max=%d"
-                WRMSG( HHC00107, "I", CCKD_GC_THREAD_NAME "()",
-                    cckdblk.gca, cckdblk.gcs, cckdblk.gcmax );
-
-            ++cckdblk.gcs;
-
-            /* Release lock across thread create to prevent interlock  */
-            release_lock( &cckdblk.gclock );
-            {
-                rc = create_thread( &tid, JOINABLE, cckd_gcol, NULL, CCKD_GC_THREAD_NAME );
-            }
-            obtain_lock( &cckdblk.gclock );
-
-            if (rc)
-            {
-                // "Error in function create_thread() for %s %d of %d: %s"
-                WRMSG( HHC00106, "E", CCKD_GC_THREAD_NAME "()",
-                    cckdblk.gcs-1, cckdblk.gcmax, strerror( rc ));
-
-                --cckdblk.gcs;
-            }
-        }
-    }
-    release_lock( &cckdblk.gclock );
-
-    /* Ensure the Dasd Hardener is running, if it's supposed to be. */
-    if (cckdblk.dhint > 0)
-        cckd_dhstart(0);
-
     obtain_lock( &cckd->cckdiolock );
     {
         cache_lock( CACHE_DEVBUF );
@@ -1427,6 +1388,14 @@ BYTE            buf2[ 64*1024 ];        /* 64K Compress buffer       */
 
     CCKD_TRACE( "%d wrtrk[%2.2d] %d complete flags:%8.8x",
                 writer, o, trk, cache_getflag( CACHE_DEVBUF, o ));
+
+    /* Schedule the garbage collector, if it needs to be. */
+    if (cckdblk.gcint > 0)
+        cckd_gcstart( false );
+
+    /* Ensure the Dasd Hardener is running, if it's supposed to be. */
+    if (cckdblk.dhint > 0)
+        cckd_dhstart( false );
 
 } /* end function cckd64_writer_write */
 
@@ -4125,77 +4094,6 @@ S64             free_count=0;           /* Total number free spaces  */
 
     return NULL;
 } /* end function cckd64_sf_stats */
-
-/*-------------------------------------------------------------------*/
-/* Start garbage collector                                           */
-/*-------------------------------------------------------------------*/
-void cckd64_gcstart()
-{
-    DEVBLK*      dev;
-    CCKD64_EXT*  cckd;
-    TID tid;
-    int flag = 0;
-    int rc;
-
-    cckd_lock_devchain(0);
-    {
-        for (dev = cckdblk.dev1st; dev; dev = cckd->devnext)
-        {
-            cckd = dev->cckd_ext;
-
-            if (!dev->cckd64)
-                continue;
-
-            obtain_lock( &cckd->filelock );
-            {
-                if (cckd->cdevhdr[ cckd->sfn ].free_total)
-                {
-                    cckd->cdevhdr[ cckd->sfn ].cdh_opts |= (CCKD_OPT_OPENED | CCKD_OPT_OPENRW);
-                    cckd64_write_chdr( dev );
-                    flag = 1;
-                }
-            }
-            release_lock( &cckd->filelock );
-        }
-    }
-    cckd_unlock_devchain();
-
-    /* Schedule the garbage collector */
-    if (flag && cckdblk.gcs < cckdblk.gcmax)
-    {
-        /* ensure read integrity for gc count */
-        obtain_lock( &cckdblk.gclock );
-        {
-            if (cckdblk.gcs < cckdblk.gcmax)
-            {
-                /* Schedule a new garbage collector thread  */
-                if (!cckdblk.batch || cckdblk.batchml > 1)
-                    // "Starting thread %s, active=%d, started=%d, max=%d"
-                    WRMSG( HHC00107, "I", CCKD_GC_THREAD_NAME "() by command line",
-                        cckdblk.gca, cckdblk.gcs, cckdblk.gcmax );
-
-                ++cckdblk.gcs;
-
-                /* Release lock across thread create to prevent interlock  */
-                release_lock( &cckdblk.gclock );
-                {
-                    rc = create_thread( &tid, JOINABLE, cckd_gcol, NULL, CCKD_GC_THREAD_NAME );
-                }
-                obtain_lock( &cckdblk.gclock );
-
-                if (rc)
-                {
-                    // "Error in function create_thread() for %s %d of %d: %s"
-                    WRMSG( HHC00106, "E", CCKD_GC_THREAD_NAME "() by command line",
-                        cckdblk.gcs-1, cckdblk.gcmax, strerror( rc ));
-
-                    --cckdblk.gcs;
-                }
-            }
-        }
-        release_lock( &cckdblk.gclock );
-    }
-}
 
 /*-------------------------------------------------------------------*/
 /* Report Garbage Collection state for a given CCKD device           */

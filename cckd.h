@@ -303,8 +303,9 @@ struct CCKDBLK                          /* Global cckd dasd block    */
                                            prevent them from running
                                            at the same time          */
 
-#define LOCK_DH_GC()    obtain_lock(  &cckdblk.dh_gc_lock )
-#define UNLOCK_DH_GC()  release_lock( &cckdblk.dh_gc_lock )
+#define DH_GC_LOCK      cckdblk.dh_gc_lock
+#define LOCK_DH_GC()    obtain_lock(  &DH_GC_LOCK )
+#define UNLOCK_DH_GC()  release_lock( &DH_GC_LOCK )
 
 
         LOCK             gclock;        /* Garbage collector lock    */

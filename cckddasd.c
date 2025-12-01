@@ -172,7 +172,7 @@ void cckd_dasd_term_if_appropriate()
     {
         max = cckdblk.ramax;    /* Save current value */
         cckdblk.ramax = 0;      /* signal   all threads to terminate */
-        while (cckdblk.ras)     /* wait for all threads to terminate */
+        while (cckdblk.ras > 0) /* wait for all threads to terminate */
         {
             broadcast_condition( &cckdblk.racond );
             wait_condition( &cckdblk.termcond, &cckdblk.ralock );
@@ -188,7 +188,7 @@ void cckd_dasd_term_if_appropriate()
         {
             max = cckdblk.dhmax;    /* Save current value */
             cckdblk.dhmax = 0;      /* signal   all threads to terminate */
-            while (cckdblk.dhs)     /* wait for all threads to terminate */
+            while (cckdblk.dhs > 0) /* wait for all threads to terminate */
             {
                 broadcast_condition( &cckdblk.dhcond );
                 wait_condition( &cckdblk.termcond, &cckdblk.dhlock );
@@ -203,7 +203,7 @@ void cckd_dasd_term_if_appropriate()
     {
         max = cckdblk.gcmax;    /* Save current value */
         cckdblk.gcmax = 0;      /* signal   all threads to terminate */
-        while (cckdblk.gcs)     /* wait for all threads to terminate */
+        while (cckdblk.gcs > 0) /* wait for all threads to terminate */
         {
             broadcast_condition( &cckdblk.gccond );
             wait_condition( &cckdblk.termcond, &cckdblk.gclock );
@@ -217,7 +217,7 @@ void cckd_dasd_term_if_appropriate()
     {
         max = cckdblk.termwr;   /* Save current value */
         cckdblk.termwr = 1;     /* signal   all threads to terminate */
-        while (cckdblk.wrs)     /* wait for all threads to terminate */
+        while (cckdblk.wrs > 0) /* wait for all threads to terminate */
         {
             broadcast_condition( &cckdblk.wrcond );
             wait_condition( &cckdblk.termcond, &cckdblk.wrlock );
@@ -994,7 +994,7 @@ int             rc;                     /* Return code               */
 
     /* Ensure the Dasd Hardener is running, if it's supposed to be. */
     if (cckdblk.dhint > 0)
-        cckd_dhstart(0);
+        cckd_dhstart( false );
 
     return len;
 
@@ -1665,7 +1665,8 @@ int             ras;
 
     release_lock( &cckdblk.ralock );
 
-    if (!ras)
+    /* Last thread to terminate? */
+    if (ras <= 0)
         signal_condition( &cckdblk.termcond );
 
     return NULL;
@@ -1674,14 +1675,16 @@ int             ras;
 /*-------------------------------------------------------------------*/
 /* Start the Dasd Hardener, if it isn't already running.             */
 /*-------------------------------------------------------------------*/
-void cckd_dhstart(int by_cmdline)
+void cckd_dhstart( bool by_cmdline )
 {
     TID tid;
     int rc;
-    char *how_started;
+    const char* threadname = by_cmdline ? CCKD_DH_THREAD_NAME " (by command line)"
+                                        : CCKD_DH_THREAD_NAME;
 
-    /* Schedule the Dasd Hardener  */
-    how_started = by_cmdline ? CCKD_DH_THREAD_NAME "() by command line" : CCKD_DH_THREAD_NAME "()";
+    /* Don't bother if shutting down */
+    if (sysblk.shutdown)
+        return;
 
     obtain_lock( &cckdblk.dhlock );    // Lock the counters.
     {
@@ -1689,8 +1692,9 @@ void cckd_dhstart(int by_cmdline)
         {
             /* Schedule the Dasd Hardener thread  */
             if (!cckdblk.batch || cckdblk.batchml > 1)
+
                 // "Starting thread %s, active=%d, started=%d, max=%d"
-                WRMSG( HHC00107, "I", how_started,
+                WRMSG( HHC00107, "I", threadname,
                     cckdblk.dha, cckdblk.dhs, cckdblk.dhmax );
 
             ++cckdblk.dhs;
@@ -1700,7 +1704,7 @@ void cckd_dhstart(int by_cmdline)
             if (rc)
             {
                 // "Error in function create_thread() for %s %d of %d: %s"
-                WRMSG( HHC00106, "E", how_started,
+                WRMSG( HHC00106, "E", threadname,
                     cckdblk.dhs-1, cckdblk.dhmax, strerror( rc ));
 
                 --cckdblk.dhs;
@@ -1725,6 +1729,10 @@ int             rc;						/* generic return code       */
 bool            cont = true;            /* Continue running boolean  */
 
     UNREFERENCED( arg );
+
+    /* Don't bother if shutting down */
+    if (sysblk.shutdown)
+        return NULL;
 
     LOCK_DH_GC();       // (prevent Garbage Collector from running)
 
@@ -1807,7 +1815,7 @@ bool            cont = true;            /* Continue running boolean  */
                     if (cckd->needsdh && !cckd->stopping && !sysblk.shutdown)
                     {
                         CCKD_TRACE("needs hardening");
-                        while (cckd->wrpending || cckd->cckdioact)
+                        while (!sysblk.shutdown && (cckd->wrpending || cckd->cckdioact))
                         {
                             cckd->cckdwaiters++;
                             CCKD_TRACE("%s waiting 1 second to complete %d pending writes",
@@ -1846,6 +1854,10 @@ bool            cont = true;            /* Continue running boolean  */
         if (cckdblk.debug)
             WRMSG( HHC00392, "D" );
 
+        /* Don't bother continuing if shutting down */
+        if (sysblk.shutdown)
+            break;
+
         /* Wait a bit before starting the next cycle */
         gettimeofday (&tv_now, NULL);
         tt_now = tv_now.tv_sec + ((tv_now.tv_usec + 500000)/1000000);
@@ -1863,15 +1875,7 @@ bool            cont = true;            /* Continue running boolean  */
         tm.tv_sec = tv_now.tv_sec + cckdblk.dhint;
         tm.tv_nsec = tv_now.tv_usec * 1000;
 
-        obtain_lock( &cckdblk.dhlock );
-        {
-            UNLOCK_DH_GC();     // (allow Garbage Collector to run)
-            {
-                timed_wait_condition( &cckdblk.dhcond, &cckdblk.dhlock, &tm );
-            }
-            LOCK_DH_GC();       // (prevent Garbage Collector from running)
-        }
-        release_lock( &cckdblk.dhlock );
+        timed_wait_condition( &cckdblk.dhcond, &DH_GC_LOCK, &tm );
     }
     // end while(1)
 
@@ -1886,6 +1890,7 @@ bool            cont = true;            /* Continue running boolean  */
         cckdblk.dhs--;
         cckdblk.dha--;
 
+        /* Last thread to terminate? */
         if (cckdblk.dhs <= 0)
              signal_condition( &cckdblk.termcond );
     }
@@ -2175,7 +2180,8 @@ int             wrs;
 
     release_lock( &cckdblk.wrlock );
 
-    if (!wrs)
+    /* Last thread to terminate? */
+    if (wrs <= 0)
         signal_condition( &cckdblk.termcond );
 
     return NULL;
@@ -2203,11 +2209,9 @@ int cckd_writer_scan( int* o, int ix, int i, void* data )
 /*-------------------------------------------------------------------*/
 void cckd_writer_write( int writer, int o )
 {
-TID             tid;                    /* Writer thead id           */
 CCKD_EXT*       cckd;                   /* -> cckd extension         */
 DEVBLK*         dev;                    /* Device block              */
 U16             devnum;                 /* Device number             */
-int             rc;                     /* (work) return code        */
 int             trk;                    /* Track number              */
 BYTE*           buf;                    /* Buffer                    */
 BYTE*           bufp;                   /* Buffer to be written      */
@@ -2293,43 +2297,6 @@ BYTE            buf2[ 64*1024 ];        /* 64K Compress buffer       */
     }
     release_lock( &cckd->filelock );
 
-    /* Schedule the garbage collector */
-    obtain_lock( &cckdblk.gclock );/* ensure read integrity for gc count */
-    {
-        if (cckdblk.gcint > 0 && cckdblk.gcs < cckdblk.gcmax)
-        {
-            /* Schedule a new garbage collector thread */
-
-            if (!cckdblk.batch || cckdblk.batchml > 1)
-                // "Starting thread %s, active=%d, started=%d, max=%d"
-                WRMSG( HHC00107, "I", CCKD_GC_THREAD_NAME "()",
-                    cckdblk.gca, cckdblk.gcs, cckdblk.gcmax );
-
-            ++cckdblk.gcs;
-
-            /* Release lock across thread create to prevent interlock  */
-            release_lock( &cckdblk.gclock );
-            {
-                rc = create_thread( &tid, JOINABLE, cckd_gcol, NULL, CCKD_GC_THREAD_NAME );
-            }
-            obtain_lock( &cckdblk.gclock );
-
-            if (rc)
-            {
-                // "Error in function create_thread() for %s %d of %d: %s"
-                WRMSG( HHC00106, "E", CCKD_GC_THREAD_NAME "()",
-                    cckdblk.gcs-1, cckdblk.gcmax, strerror( rc ));
-
-                --cckdblk.gcs;
-            }
-        }
-    }
-    release_lock( &cckdblk.gclock );
-
-    /* Ensure the Dasd Hardener is running, if it's supposed to be. */
-    if (cckdblk.dhint > 0)
-        cckd_dhstart(0);
-
     obtain_lock( &cckd->cckdiolock );
     {
         cache_lock( CACHE_DEVBUF );
@@ -2358,6 +2325,14 @@ BYTE            buf2[ 64*1024 ];        /* 64K Compress buffer       */
 
     CCKD_TRACE( "%d wrtrk[%2.2d] %d complete flags:%8.8x",
                 writer, o, trk, cache_getflag( CACHE_DEVBUF, o ));
+
+    /* Schedule the garbage collector, if it's supposed to be running. */
+    if (cckdblk.gcint > 0)
+        cckd_gcstart( false );
+
+    /* Ensure the Dasd Hardener is running, if it's supposed to be. */
+    if (cckdblk.dhint > 0)
+        cckd_dhstart( false );
 
 } /* end function cckd_writer_write */
 
@@ -5324,16 +5299,30 @@ void remove_dev_from_cckd_chain_locked( DEVBLK* old_dev )
 /*-------------------------------------------------------------------*/
 /* Start garbage collector                                           */
 /*-------------------------------------------------------------------*/
-void cckd_gcstart()
+void cckd_gcstart( bool by_cmdline )
 {
-    DEVBLK*    dev;
-    CCKD_EXT*  cckd;
-    TID tid;
-    int flag = 0;
-    int rc;
+    DEVBLK*      dev;
+    CCKD_EXT*    cckd;
+    CCKD64_EXT*  cckd64;
 
+    bool freespace = false;
+    TID tid;
+    int rc;
+    const char* threadname = by_cmdline ? CCKD_GC_THREAD_NAME " (by command line)"
+                                        : CCKD_GC_THREAD_NAME;
+
+    /* Don't bother if shutting down */
+    if (sysblk.shutdown)
+        return;
+
+    /* Check if Garbage Collection is even needed! (i.e. if any
+       compressed dasds have any free space at all, meaning the
+       Garbage Collector has some work to do to try and remove it)
+    */
     cckd_lock_devchain(0);
     {
+        /* Search all CCKD devices... */ 
+
         for (dev = cckdblk.dev1st; dev; dev = cckd->devnext)
         {
             cckd = dev->cckd_ext;
@@ -5343,45 +5332,67 @@ void cckd_gcstart()
 
             obtain_lock( &cckd->filelock );
             {
+                /* Is there any free that can possibly be removed? */
                 if (cckd->cdevhdr[ cckd->sfn ].free_total)
                 {
+                    /* Yes, update its compressed device header */
+                    freespace = true;
                     cckd->cdevhdr[ cckd->sfn ].cdh_opts |= (CCKD_OPT_OPENED | CCKD_OPT_OPENRW);
                     cckd_write_chdr( dev );
-                    flag = 1;
                 }
             }
             release_lock( &cckd->filelock );
         }
+
+        /* Search all CCKD64 devices... */ 
+
+        for (dev = cckdblk.dev1st; dev; dev = cckd64->devnext)
+        {
+            cckd64 = dev->cckd_ext;
+
+            if (!dev->cckd64)
+                continue;
+
+            obtain_lock( &cckd64->filelock );
+            {
+                /* Is there any free that can possibly be removed? */
+                if (cckd64->cdevhdr[ cckd64->sfn ].free_total)
+                {
+                    /* Yes, update its compressed device header */
+                    freespace = true;
+                    cckd64->cdevhdr[ cckd64->sfn ].cdh_opts |= (CCKD_OPT_OPENED | CCKD_OPT_OPENRW);
+                    cckd64_write_chdr( dev );
+                }
+            }
+            release_lock( &cckd64->filelock );
+        }
     }
     cckd_unlock_devchain();
 
-    /* Schedule the garbage collector */
-    if (flag && cckdblk.gcs < cckdblk.gcmax)
+    /* Schedule the garbage collector, if it's
+       needed, possible, and not already running
+    */
+    if (freespace && cckdblk.gcs < cckdblk.gcmax)
     {
-        /* ensure read integrity for gc count */
+        /* (ensure read integrity for gc count) */
         obtain_lock( &cckdblk.gclock );
         {
             if (cckdblk.gcs < cckdblk.gcmax)
             {
-                /* Schedule a new garbage collector thread  */
+                /* Schedule the garbage collector thread  */
                 if (!cckdblk.batch || cckdblk.batchml > 1)
                     // "Starting thread %s, active=%d, started=%d, max=%d"
-                    WRMSG( HHC00107, "I", CCKD_GC_THREAD_NAME "() by command line",
+                    WRMSG( HHC00107, "I", threadname,
                         cckdblk.gca, cckdblk.gcs, cckdblk.gcmax );
 
                 ++cckdblk.gcs;
 
-                /* Release lock across thread create to prevent interlock  */
-                release_lock( &cckdblk.gclock );
-                {
-                    rc = create_thread( &tid, JOINABLE, cckd_gcol, NULL, CCKD_GC_THREAD_NAME );
-                }
-                obtain_lock( &cckdblk.gclock );
+                rc = create_thread( &tid, JOINABLE, cckd_gcol, NULL, CCKD_GC_THREAD_NAME );
 
                 if (rc)
                 {
                     // "Error in function create_thread() for %s %d of %d: %s"
-                    WRMSG( HHC00106, "E", CCKD_GC_THREAD_NAME "() by command line",
+                    WRMSG( HHC00106, "E", threadname,
                         cckdblk.gcs-1, cckdblk.gcmax, strerror( rc ));
 
                     --cckdblk.gcs;
@@ -5407,6 +5418,10 @@ int             gcs;                    /* #of gc threads started    */
 bool            cont = true;            /* Continue running boolean  */
 
     UNREFERENCED( arg );
+
+    /* Don't bother if shutting down */
+    if (sysblk.shutdown)
+        return NULL;
 
     LOCK_DH_GC();       // (prevent Dasd Hardener from running)
 
@@ -5471,10 +5486,11 @@ bool            cont = true;            /* Continue running boolean  */
         /* Perform collection on each device */
         cckd_lock_devchain(0);
         {
-            for (dev = cckdblk.dev1st; dev; dev = cckd->devnext)
+            for (dev = cckdblk.dev1st; dev && !sysblk.shutdown; dev = cckd->devnext)
             {
                 cckd = dev->cckd_ext;
-                cckd_gcol_dev( dev, &tv_now );
+                if (!sysblk.shutdown)
+                    cckd_gcol_dev( dev, &tv_now );
             }
         }
         cckd_unlock_devchain();
@@ -5484,7 +5500,7 @@ bool            cont = true;            /* Continue running boolean  */
             WRMSG( HHC00383, "I" );
 
         /* If we're in manual on-demand mode, then we're done. */
-        if (cckdblk.gcint <= 0)
+        if (cckdblk.gcint <= 0 || sysblk.shutdown)
             break;
 
         /* Otherwise, wait a bit before starting the next cycle */
@@ -5503,15 +5519,7 @@ bool            cont = true;            /* Continue running boolean  */
         tm.tv_sec = tv_now.tv_sec + cckdblk.gcint;
         tm.tv_nsec = tv_now.tv_usec * 1000;
 
-        obtain_lock (&cckdblk.gclock);
-        {
-            UNLOCK_DH_GC();     // (allow Dasd Hardener to run)
-            {
-                timed_wait_condition( &cckdblk.gccond, &cckdblk.gclock, &tm );
-            }
-            LOCK_DH_GC();       // (prevent Dasd Hardener from running)
-        }
-        release_lock( &cckdblk.gclock );
+        timed_wait_condition( &cckdblk.gccond, &DH_GC_LOCK, &tm );
     }
     // end while(1)
 
@@ -5528,7 +5536,8 @@ bool            cont = true;            /* Continue running boolean  */
 
         gcs = cckdblk.gcs;
 
-        if (!gcs)
+        /* Last thread to terminate? */
+        if (gcs <= 0)
             signal_condition( &cckdblk.termcond );
     }
     release_lock( &cckdblk.gclock );
@@ -6537,9 +6546,9 @@ void cckd_command_help()
 } /* end function cckd_command_help */
 
 /*-------------------------------------------------------------------*/
-/* cckd command opts                                                 */
+/* Report cckd command opts                                          */
 /*-------------------------------------------------------------------*/
-void cckd_command_opts()
+void cckd_command_report_opts()
 {
     char msgbuf[256];
 
@@ -6607,8 +6616,7 @@ void cckd_command_opts()
     );
     WRMSG( HHC00346, "I", msgbuf );
 
-    return;
-} /* end function cckd_command_opts */
+} /* end function cckd_command_report_opts */
 
 /*-------------------------------------------------------------------*/
 /* cckd command stats                                                */
@@ -6673,16 +6681,19 @@ DLL_EXPORT bool cckd_dtax()
 /*-------------------------------------------------------------------*/
 /* cckd command processor                                            */
 /*-------------------------------------------------------------------*/
-DLL_EXPORT int cckd_command( char* op, int cmd )
+DLL_EXPORT int cckd_command( char* op, bool verbose )
 {
 char  *kw, *p, c, buf[256];
-int   val, opts = 0;
-int   rc;
+int   rc, val;
+
+bool  opts_changed    = false;
+bool  gcint_changed   = false;
+bool  dhint_changed   = false;
 
     /* Display help for null operand */
     if (!op)
     {
-        if (cmd && memcmp( &cckdblk.id, CCKDBLK_ID, sizeof( cckdblk.id )) == 0)
+        if (verbose && memcmp( &cckdblk.id, CCKDBLK_ID, sizeof( cckdblk.id )) == 0)
             cckd_command_help();
         return 0;
     }
@@ -6717,20 +6728,20 @@ int   rc;
             // Display cckd help
             if (CMD( kw, HELP, 4 ))
             {
-                if (!cmd) return 0;
+                if (!verbose) return 0;
                 cckd_command_help();
             }
             // Display current cckd statistics
             else if (CMD( kw, STATS, 4 ))
             {
-                if (!cmd) return 0;
+                if (!verbose) return 0;
                 cckd_command_stats();
             }
             // Display current cckd options
             else if (CMD( kw, OPTS, 4 ))
             {
-                if (!cmd) return 0;
-                cckd_command_opts();
+                if (!verbose) return 0;
+                cckd_command_report_opts();
             }
             else
             {
@@ -6769,7 +6780,7 @@ int   rc;
             case CCKD_COMPRESS_ZLIB:
             case CCKD_COMPRESS_BZIP2:
                 cckdblk.comp = val < 0 ? 0xff : val;
-                opts = 1;
+                opts_changed = true;
                 break;
             default: /* unsupported algorithm */
                 // "CCKD file: value %d invalid for %s"
@@ -6789,7 +6800,7 @@ int   rc;
             else
             {
                 cckdblk.compparm = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Turn CCW tracing debug messages on or off
@@ -6804,7 +6815,7 @@ int   rc;
             else
             {
                 cckdblk.debug = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Check for Dasd Hardener interval in seconds
@@ -6818,14 +6829,8 @@ int   rc;
             }
             else
             {
-                // signal Dasd Hardener thread to start using new value
-                obtain_lock( &cckdblk.dhlock );
-                {
-                    cckdblk.dhint = val;
-                    broadcast_condition( &cckdblk.dhcond );
-                }
-                release_lock( &cckdblk.dhlock );
-                opts = 1;
+                cckdblk.dhint = val;
+                opts_changed = dhint_changed = true;
             }
         }
         // Start Dasd Hardener
@@ -6839,11 +6844,8 @@ int   rc;
             }
             else
             {
-                if ((cckdblk.dhstart = val) == true)
-                {
-                    static const bool by_cmdline = true;
-                    cckd_dhstart( by_cmdline );
-                }
+                cckdblk.dhstart = val;
+                opts_changed = true;
             }
         }
         // Dump Table At Exit
@@ -6858,7 +6860,7 @@ int   rc;
             else
             {
                 cckdblk.dtax = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Set the free pending value
@@ -6873,7 +6875,7 @@ int   rc;
             else
             {
                 cckdblk.freepend = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Turn fsync on or off
@@ -6888,7 +6890,7 @@ int   rc;
             else
             {
                 cckdblk.fsync = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Garbage collection interval
@@ -6903,7 +6905,7 @@ int   rc;
             else
             {
                 cckdblk.gcint = val;
-                opts = 1;
+                opts_changed = gcint_changed = true;
             }
         }
         // Garbage collector messages
@@ -6918,7 +6920,7 @@ int   rc;
             else
             {
                 cckdblk.gcmsgs = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Garbage collection parameter
@@ -6933,7 +6935,7 @@ int   rc;
             else
             {
                 cckdblk.gcparm = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Start garbage collector
@@ -6947,11 +6949,8 @@ int   rc;
             }
             else
             {
-                if ((cckdblk.gcstart = val) == true)
-                {
-                    cckd_gcstart();
-                    cckd64_gcstart();
-                }
+                cckdblk.gcstart = val;
+                opts_changed = true;
             }
         }
         // Check for null linux tracks
@@ -6966,7 +6965,7 @@ int   rc;
             else
             {
                 cckdblk.linuxnull = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Turn off stats report at close
@@ -6981,7 +6980,7 @@ int   rc;
             else
             {
                 cckdblk.nosfd = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Turn stress writes on or off
@@ -6996,7 +6995,7 @@ int   rc;
             else
             {
                 cckdblk.nostress = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Number readahead threads
@@ -7011,7 +7010,7 @@ int   rc;
             else
             {
                 cckdblk.ramax = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Readahead queue size
@@ -7026,7 +7025,7 @@ int   rc;
             else
             {
                 cckdblk.ranbr = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Number of tracks to readahead
@@ -7041,7 +7040,7 @@ int   rc;
             else
             {
                 cckdblk.readaheads = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Number of trace table entries
@@ -7091,7 +7090,7 @@ int   rc;
                     cckdblk.itracex = itrace + val;
                     cckdblk.itracen = val;
                     cckdblk.itracec = 0;
-                    opts = 1;
+                    opts_changed = true;
                 }
                 RELEASE_TRACE_LOCK();
             }
@@ -7108,7 +7107,7 @@ int   rc;
             else
             {
                 cckdblk.wrmax = val;
-                opts = 1;
+                opts_changed = true;
             }
         }
         // Unknown option
@@ -7116,15 +7115,46 @@ int   rc;
         {
             // "CCKD file: invalid cckd keyword: %s"
             WRMSG( HHC00349, "E", kw );
-            if (!cmd) return -1;
+            if (!verbose) return -1;
             cckd_command_help();
             op = NULL;
         }
     }
     /* end while (op) */
 
-    if (cmd && opts)
-        cckd_command_opts();
+    /* If anything changed... */
+    if (opts_changed)
+    {
+        // Report new values if requested */
+        if (verbose)
+            cckd_command_report_opts();
+
+        /* REACT to the new values, as needed... */
+
+        if (gcint_changed)      // (notify thread of new interval)
+        {
+            obtain_lock( &cckdblk.gclock );
+            {
+                broadcast_condition( &cckdblk.gccond );
+            }
+            release_lock( &cckdblk.gclock );
+        }
+
+        if (cckdblk.gcstart)    // (start thread if needed)
+            cckd_gcstart( true );
+
+        if (dhint_changed)      // (notify thread of new interval)
+        {
+            obtain_lock( &cckdblk.dhlock );
+            {
+                broadcast_condition( &cckdblk.dhcond );
+            }
+            release_lock( &cckdblk.dhlock );
+        }
+
+        if (cckdblk.dhstart)    // (start thread if needed)
+            cckd_dhstart( true );
+    }
 
     return 0;
 } /* end function cckd_command */
