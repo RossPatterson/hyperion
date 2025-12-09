@@ -1638,7 +1638,7 @@ void cgibin_api_v1_syslog(WEBBLK *webblk)
 
     logbuf_idx = msgcount ? log_line( msgcount ) : -1;
 
-    if ((num_bytes = log_read( &logbuf_ptr, &logbuf_idx, LOG_NOBLOCK )) > 0)
+    while ((num_bytes = log_read( &logbuf_ptr, &logbuf_idx, LOG_NOBLOCK )) > 0)
     {
         char   *wrk_bufptr      = malloc( num_bytes );
         char   *sav_wrk         = NULL;
